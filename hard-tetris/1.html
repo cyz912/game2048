@@ -1,0 +1,441 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+		<title> Tetris </title>
+		<link rel="stylesheet" type="text/css" href="http://qntm.org/page/reset.css" />
+		<style type="text/css">
+			body {
+				font-family: arial;
+			}
+			p {
+				margin: 10px;
+			}
+			td.cell {
+				width: 25px;
+				height: 25px;
+				color: white;
+				background-color: black;
+				padding: 0;
+				text-align: center;
+				vertical-align: middle;
+			}
+		</style>
+		<script type="text/javascript"><!--
+			var wellWidth   = 10;
+			var wellDepth   = 20;
+			var bar         = 4;
+			var pieces = {
+            "S" : [{ "x" : 1, "y" : 2 }, { "x" : 2, "y" : 1 }, { "x" : 2, "y" : 2 }, { "x" : 3, "y" : 1 }],
+            "Z" : [{ "x" : 1, "y" : 1 }, { "x" : 2, "y" : 1 }, { "x" : 2, "y" : 2 }, { "x" : 3, "y" : 2 }],
+            "O" : [{ "x" : 1, "y" : 1 }, { "x" : 1, "y" : 2 }, { "x" : 2, "y" : 1 }, { "x" : 2, "y" : 2 }],
+            "I" : [{ "x" : 0, "y" : 1 }, { "x" : 1, "y" : 1 }, { "x" : 2, "y" : 1 }, { "x" : 3, "y" : 1 }],
+            "L" : [{ "x" : 1, "y" : 1 }, { "x" : 1, "y" : 2 }, { "x" : 2, "y" : 1 }, { "x" : 3, "y" : 1 }],
+            "J" : [{ "x" : 1, "y" : 1 }, { "x" : 1, "y" : 2 }, { "x" : 1, "y" : 3 }, { "x" : 2, "y" : 1 }],
+            "T" : [{ "x" : 1, "y" : 1 }, { "x" : 2, "y" : 1 }, { "x" : 2, "y" : 2 }, { "x" : 3, "y" : 1 }]};
+			var transforms = { "L" : 1, "R" : 1, "D" : 1, "U" : 1 };
+			var orientations;
+			var liveWell;
+			var livePiece;
+			var searchDepth;
+			var replayOut;
+			var replayIn;
+			var replayTimeoutId;
+			function addPiece(thisWell, thisPiece) {
+				var orientation = orientations[thisPiece.id][thisPiece.o];
+				var xActual = thisPiece.x + orientation.xMin;
+				var yActual = thisPiece.y + orientation.yMin;
+				thisWell.highestBlue = Math.min(thisWell.highestBlue, yActual);
+				for(var row = 0; row < orientation.yDim; row++ ) {
+					thisWell.content[yActual + row] |= (orientation.rows[row] << xActual);
+					if(yActual >= bar && thisWell.content[yActual + row] == (1 << wellWidth) - 1) {
+						for(var k = yActual + row; k > 1; k--) {
+							thisWell.content[k] = thisWell.content[k-1];
+						}
+						thisWell.content[0] = 0;
+						thisWell.score++;
+						thisWell.highestBlue++;
+					}
+				}
+			}
+			function bestWellRating(thisWell, pieceId, thisSearchDepth) {
+				var thisPiece = {
+					"id" : pieceId,
+					"x"  : 0,
+					"y"  : 0,
+					"o"  : 0
+				};
+				var bestRating = null;
+                while(
+					   thisPiece.y + 4 < wellDepth
+					&& thisWell.content[thisPiece.y + 4] == 0
+				) {
+					thisPiece = tryTransform(thisWell, thisPiece, "D");
+				}
+				var piecePositions = [];
+				piecePositions.push(thisPiece);
+				var ints = [];
+				ints[hashCode(thisPiece.x, thisPiece.y, thisPiece.o)] = 1;
+				var i = 0;
+				while(i < piecePositions.length) {
+					thisPiece = piecePositions[i];
+					for(var j in transforms) {
+                        var newPiece = tryTransform(thisWell, thisPiece, j);
+						if(newPiece == null) {
+                            if(j == "D") {
+                                var newWell = {
+									"content" : [],
+									"score" : thisWell.score,
+									"highestBlue" : thisWell.highestBlue
+								};
+								for(var row2 = 0; row2 < wellDepth; row2++) {
+									newWell.content.push(thisWell.content[row2]);
+								}
+                                addPiece(newWell, thisPiece);
+                                var currentRating = newWell.highestBlue + (thisSearchDepth == 0 ? 0
+                                : worstPieceRating(newWell, thisSearchDepth-1) / 100);
+                                if(bestRating == null || currentRating > bestRating) {
+									bestRating = currentRating;
+								}
+							}
+						}
+                        else {
+                            var newHashCode = hashCode(newPiece.x, newPiece.y, newPiece.o);
+                            if(ints[newHashCode] == undefined) {
+								piecePositions.push(newPiece);
+								ints[newHashCode] = 1;
+							}
+						}
+
+					}
+					i++;
+				}
+				return bestRating;
+			}
+            function clearField() {
+                liveWell = {
+					"content" : [],
+					"score" : 0,
+					"highestBlue" : wellDepth
+				};
+				for(var row = 0; row < wellDepth; row++) {
+					liveWell.content.push(0);
+				}
+				drawWell(liveWell);
+				drawScore();
+                livePiece = worstPiece(liveWell);
+				drawPiece(livePiece);
+                replayOut = [];
+			}
+            function createPlayingField() {
+                var tbody = document.getElementById("welltbody");
+				for(var i = 0; i < wellDepth; i++) {
+					var tr = document.createElement("tr");
+					tbody.appendChild(tr);
+					for(var j = 0; j < wellWidth; j++) {
+						var td = document.createElement("td");
+						td.className = "cell";
+						if(i == bar) {
+							td.style.borderTop = "1px solid red";
+						}
+						tr.appendChild(td);
+					}
+				}
+                tbody.rows[0].cells[1].innerHTML = "<span onclick=\"inputHandler('U');\">&#x27f3;</span>";
+				tbody.rows[1].cells[0].innerHTML = "<span onclick=\"inputHandler('L');\">&larr;</span>";
+				tbody.rows[1].cells[1].innerHTML = "<span onclick=\"inputHandler('D');\">&darr;</span>";
+				tbody.rows[1].cells[2].innerHTML = "<span onclick=\"inputHandler('R');\">&rarr;</span>";
+				tbody.rows[0].cells[1].style.cursor = "pointer";
+				tbody.rows[1].cells[0].style.cursor = "pointer";
+				tbody.rows[1].cells[1].style.cursor = "pointer";
+				tbody.rows[1].cells[2].style.cursor = "pointer";
+                orientations = {};
+				for(var i in pieces) {
+					var bits = pieces[i];
+                    orientations[i] = [];
+					for(var o = 0; o < 4; o++) {
+						var rows = [];
+						for(var row = 0; row < 4; row++) {
+							rows.push(0);
+						}
+						orientations[i].push({"xMin" : null, "yMin" : null, "xDim" : null, "yDim" : null, "rows" : rows});
+					}
+					for(var j in bits) {
+						var bit = { "x" : bits[j].x, "y" : bits[j].y };
+						for(var o = 0; o < 4; o++) {
+							orientations[i][o].rows[bit.y] += 1 << bit.x;
+                            if(orientations[i][o].xMin == null || bit.x < orientations[i][o].xMin) {
+								orientations[i][o].xMin = bit.x;
+							}
+							if(orientations[i][o].yMin == null || bit.y < orientations[i][o].yMin) {
+								orientations[i][o].yMin = bit.y;
+							}
+                            if(orientations[i][o].xDim == null || bit.x > orientations[i][o].xDim) {
+								orientations[i][o].xDim = bit.x;
+							}
+                            if(orientations[i][o].yDim == null || bit.y > orientations[i][o].yDim) {
+								orientations[i][o].yDim = bit.y;
+							}
+                            bit = { "x" : 3 - bit.y, "y" : bit.x };
+						}
+					}
+					for(var o = 0; o < 4; o++) {
+						orientations[i][o].xDim = orientations[i][o].xDim - orientations[i][o].xMin + 1;
+						orientations[i][o].yDim = orientations[i][o].yDim - orientations[i][o].yMin + 1;
+                        while(orientations[i][o].rows[0] == 0) {
+							orientations[i][o].rows.shift();
+						}
+                        while(orientations[i][o].rows[orientations[i][o].rows.length-1] == 0) {
+							orientations[i][o].rows.pop();
+						}
+                        for(row = 0; row < orientations[i][o].yDim; row++) {
+							orientations[i][o].rows[row] >>= orientations[i][o].xMin;
+						}
+					}
+				}
+			}
+            function drawPiece(thisPiece) {
+				var orientation = orientations[thisPiece.id][thisPiece.o];
+				for(var row = 0; row < orientation.yDim; row++ ) {
+					for(var col = 0; col < orientation.xDim; col++) {
+						if(orientation.rows[row] & 1 << col) {
+							document
+							.getElementById("welltbody")
+							.rows[thisPiece.y + orientation.yMin + row]
+							.cells[thisPiece.x + orientation.xMin + col]
+							.style
+							.backgroundColor = "red";
+						}
+					}
+				}
+			}
+            function drawReplay() {
+                var string = "";
+                if(replayOut.length % 2 == 1) {
+					replayOut.push("D");
+				}
+                for(var i = 0; i < searchDepth; i++) {
+					string += "#";
+				}
+				var transformPair = "";
+				for(var i = 0; i < replayOut.length; i++) {
+					transformPair += replayOut[i];
+                    if(i % 2 == 1) {
+						switch(transformPair) {
+							case "LL": s = "0"; break;
+							case "LR": s = "1"; break;
+							case "LD": s = "2"; break;
+							case "LU": s = "3"; break;
+							case "RL": s = "4"; break;
+							case "RR": s = "5"; break;
+							case "RD": s = "6"; break;
+							case "RU": s = "7"; break;
+							case "DL": s = "8"; break;
+							case "DR": s = "9"; break;
+							case "DD": s = "A"; break;
+							case "DU": s = "B"; break;
+							case "UL": s = "C"; break;
+							case "UR": s = "D"; break;
+							case "UD": s = "E"; break;
+							case "UU": s = "F"; break;
+						}
+						string += s;
+						transformPair = "";
+					}
+                    if(string.length % 5 == 4) {
+						string += " ";
+					}
+				}
+                document.getElementById("replayOut").innerHTML = "replay of last game: " + string;
+			}
+            function drawScore() {
+				document.getElementById("score").innerHTML = liveWell.score;
+			}
+            function drawWell(thisWell) {
+				for(var col = 0; col < wellWidth; col++) {
+					for(var row = 0; row < wellDepth; row++) {
+						var color = (thisWell.content[row] & (1 << col)) ? "blue" : "black";
+						document
+						.getElementById("welltbody")
+						.rows[row]
+						.cells[col]
+						.style
+						.backgroundColor = color;
+					}
+				}
+			}
+            function hashCode(x, y, o) {
+				return 4*((wellDepth + 3)*x + y) + o;
+			}
+            function inputHandler(transformId) {
+				var newPiece = tryTransform(liveWell, livePiece, transformId);
+                if(newPiece == null) {
+                    if(transformId == "D") {
+                        addPiece(liveWell, livePiece);
+						livePiece = null;
+						drawScore();
+					}
+				}
+                else {
+					livePiece = newPiece;
+				}
+                replayOut.push(transformId);
+                drawWell(liveWell);
+                if(liveWell.content[bar-1] > 0) {
+                    drawReplay();
+					return false;
+				}
+                if(livePiece == null) {
+					livePiece = worstPiece(liveWell);
+				}
+
+				drawPiece(livePiece);
+				return true;
+			}
+			function inputKey(event) {
+                document.onkeydown = null;
+				event = event || window.event;
+				var transformId = null;
+				switch(event.keyCode) {
+					case 37: transformId = "L"; break;
+					case 39: transformId = "R"; break;
+					case 40: transformId = "D"; break;
+					case 38: transformId = "U"; break;
+					default: document.onkeydown = inputKey; return;
+				}
+                var gameContinues = inputHandler(transformId);
+                if(gameContinues) {
+					document.onkeydown = inputKey;
+				}
+			}
+            function inputReplayStep() {
+				var transformId = replayIn.shift();
+                while(transforms[transformId] == undefined && replayIn.length > 0) {
+					transformId = replayIn.shift();
+				}
+                var gameContinues = inputHandler(transformId);
+                if(gameContinues) {
+					if(replayIn.length > 0) {
+						replayTimeoutId = setTimeout("inputReplayStep();", 50);
+					} else {
+						document.onkeydown = inputKey;
+					}
+				}
+			}
+            function startGame(thisSearchDepth) {
+                clearTimeout(replayTimeoutId);
+                searchDepth = thisSearchDepth;
+				clearField();
+                document.onkeydown = inputKey;
+			}
+			function startReplay() {
+                clearTimeout(replayTimeoutId);
+                document.onkeydown = null;
+                var string = prompt() || "";
+                replayIn = [];
+				searchDepth = 0;
+				for(var i = 0; i < string.length; i++) {
+					switch(string[i]) {
+						case "0": replayIn.push("L", "L"); break;
+						case "1": replayIn.push("L", "R"); break;
+						case "2": replayIn.push("L", "D"); break;
+						case "3": replayIn.push("L", "U"); break;
+						case "4": replayIn.push("R", "L"); break;
+						case "5": replayIn.push("R", "R"); break;
+						case "6": replayIn.push("R", "D"); break;
+						case "7": replayIn.push("R", "U"); break;
+						case "8": replayIn.push("D", "L"); break;
+						case "9": replayIn.push("D", "R"); break;
+						case "A": replayIn.push("D", "D"); break;
+						case "B": replayIn.push("D", "U"); break;
+						case "C": replayIn.push("U", "L"); break;
+						case "D": replayIn.push("U", "R"); break;
+						case "E": replayIn.push("U", "D"); break;
+						case "F": replayIn.push("U", "U"); break;
+						case "#": searchDepth++;
+						default: break;
+					}
+				}
+                clearField();
+                inputReplayStep();
+			}
+            function tryTransform(thisWell, thisPiece, transformId) {
+                var id = thisPiece.id;
+				var x  = thisPiece.x;
+				var y  = thisPiece.y;
+				var o  = thisPiece.o;
+                switch(transformId) {
+					case "L": x--;             break;
+					case "R": x++;             break;
+					case "D": y++;             break;
+					case "U": o = (o + 1) % 4; break;
+				}
+				var orientation = orientations[id][o];
+				var xActual = x + orientation.xMin;
+				var yActual = y + orientation.yMin;
+				if(xActual < 0 || xActual + orientation.xDim > wellWidth
+                || yActual + orientation.yDim > wellDepth) {
+					return null;
+				}
+                for(var row = 0; row < orientation.rows.length; row++) {
+					if(thisWell.content[yActual + row] & (orientation.rows[row] << xActual)) {
+						return null;
+					}
+				}
+				return { "id" : id, "x" : x, "y" : y, "o" : o };
+			}
+            function worstPiece(thisWell) {
+                var worstRating = null;
+				var worstId = null;
+                var startTime = new Date().getTime();
+				for(var id in pieces) {
+					var currentRating = bestWellRating(thisWell, id, searchDepth);
+                    if(worstRating == null || currentRating < worstRating) {
+						worstRating = currentRating;
+						worstId = id;
+					}
+                    if(worstRating == 0) {
+						break;
+					}
+				}
+				return { "id" : worstId, "x"  : Math.floor((wellWidth - 4) / 2),
+					"y"  : 0, "o"  : 0 };
+			}
+            function worstPieceRating(thisWell, thisSearchDepth) {
+                var worstRating = null;
+                for(var id in pieces) {
+					var currentRating = bestWellRating(thisWell, id, thisSearchDepth);
+					if(worstRating == null || currentRating < worstRating) {
+						worstRating = currentRating;
+					}
+                    if(worstRating == 0) {
+						return 0;
+					}
+				}
+				return worstRating;
+			}
+		// --></script>
+	</head>
+	<body style="margin: 50px 0 0 50px;" onload="createPlayingField();">
+		<div style="float: left; margin: 0 50px 50px 0;">
+			<table>
+				<tbody id="welltbody">
+				</tbody>
+			</table>
+		</div>
+		<div style="margin: 0 50px 50px 0">
+			<p><a href="http://www.illumer.org/">You're playing tetris by Yizhen Chen</a></p>
+			<p><button type="button" onclick="startGame(0);">start new game</button></p>
+			<p><button type="button" onclick="startReplay();">show a replay</button></p>
+			<p><span id="score"></span></p>
+			<p><span id="replayOut"></span></p>
+			<script type="text/javascript"><!--
+				var sc_project=667681; 
+				var sc_invisible=1; 
+				var sc_partition=5; 
+				var sc_security="f56850e2"; 
+				var sc_remove_link=1; 
+			// --></script>
+		</div>
+	</body>
+</html>
